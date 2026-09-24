@@ -1,0 +1,12 @@
+{
+  "apiVersion": 1,
+  "id": "pcbway",
+  "name": "PCBWay",
+  "version": "0.1.0",
+  "description": "Build a PCBWay-ready ZIP of the open board: Gerbers, drill files, IPC-356 netlist, and PCBWay's BOM and placement CSVs.",
+  "main": "main.js",
+  "ui": "ui.html",
+  "uiSize": { "width": 420, "height": 560 },
+  "surfaces": ["editor:pcbnew"],
+  "permissions": ["ui:custom", "ui:project-data", "project:export", "files:save"]
+}
