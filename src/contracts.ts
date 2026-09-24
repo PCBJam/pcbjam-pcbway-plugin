@@ -22,4 +22,6 @@ export interface PluginCommands {
   export: { params: { kind: ExportStep }; result: { files: number } };
   pack: { params: Record<string, never>; result: BundleSummary };
   download: { params: Record<string, never>; result: { status: 'download-requested' | 'cancelled' } };
+  send: { params: Record<string, never>; result: { quoteUrl: string } };
+  openQuote: { params: Record<string, never>; result: { status: 'opened' | 'cancelled' } };
 }

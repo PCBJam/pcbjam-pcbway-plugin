@@ -2,11 +2,20 @@
   "apiVersion": 1,
   "id": "pcbway",
   "name": "PCBWay",
-  "version": "0.1.0",
-  "description": "Build a PCBWay-ready ZIP of the open board: Gerbers, drill files, IPC-356 netlist, and PCBWay's BOM and placement CSVs.",
+  "version": "0.2.0",
+  "description": "Send the open board to PCBWay for a quote, or download a PCBWay-ready ZIP: Gerbers, drill files, IPC-356 netlist, and PCBWay's BOM and placement CSVs.",
   "main": "main.js",
   "ui": "ui.html",
-  "uiSize": { "width": 420, "height": 560 },
+  "uiSize": { "width": 420, "height": 600 },
   "surfaces": ["editor:pcbnew"],
-  "permissions": ["ui:custom", "ui:project-data", "project:export", "files:save"]
+  "permissions": ["ui:custom", "ui:project-data", "project:export", "files:save", "network:pcbway", "ui:open-external"],
+  "endpoints": {
+    "pcbway": {
+      "origin": "https://www.pcbway.com",
+      "paths": ["/Common/KiCadUpFile/"],
+      "methods": ["POST"],
+      "auth": "none",
+      "upload": { "paths": ["/Common/KiCadUpFile/"], "field": "upload[file]", "maxBytes": 16777216 }
+    }
+  }
 }

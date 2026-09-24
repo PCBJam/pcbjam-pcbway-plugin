@@ -7,6 +7,28 @@ export interface ExportApi {
   readJson(exportId: string, name: string): Promise<unknown>;
   bundle(proposal: { parts: { exportId: string; rename?: Record<string, string> }[]; extraFiles?: { name: string; text: string }[]; zipName: string }): Promise<{ bundleId: string } & BundleSummary>;
   saveBundle(proposal: { bundleId: string }): Promise<{ status: 'download-requested' | 'cancelled' }>;
+  upload(endpointId: string, request: { path: string; bundleId: string; fields: Record<string, string> }): Promise<{ status: number; body: unknown }>;
+  openExternal(url: string): Promise<{ status: 'opened' | 'cancelled' }>;
+}
+
+/** PCBWay's KiCad upload, as used by PCBWay's own KiCad plugin (plugins/thread.py). */
+export const PCBWAY_UPLOAD_PATH = '/Common/KiCadUpFile/';
+
+/**
+ * PCBWay's answer must name a quote page on PCBWay's own site before we offer
+ * to open it: https, no credentials or port, and the endpoint's site.
+ */
+export function quoteUrlFrom(body: unknown, origin: string): string {
+  const redirect = (body as { redirect?: unknown } | null)?.redirect;
+  if (typeof redirect !== 'string') throw new Error('PCBWay answered without a quote link.');
+  // Plugin logic runs in QuickJS, which has no URL parser. The host part may
+  // not contain '@' or ':', so no credentials and no port get through.
+  const host = /^https:\/\/([A-Za-z0-9.-]+)(?:[/?#][^\s]*)?$/.exec(redirect)?.[1]?.toLowerCase();
+  if (!host) throw new Error('PCBWay answered with a link outside PCBWay.');
+  const site = (/^https:\/\/([a-z0-9.-]+)$/.exec(origin)?.[1] ?? '').replace(/^www\./, '');
+  if (!site || !(host === site || host.endsWith('.' + site)))
+    throw new Error('PCBWay answered with a link outside PCBWay.');
+  return redirect;
 }
 
 /** File names PCBWay's own KiCad plugin uses for the files it adds to the ZIP. */
@@ -40,13 +62,16 @@ export class PcbwaySession {
   private fab?: { exportId: string; doc: FabComponentsDoc };
   private exports = new Map<ExportStep, string>();
   private bundleId?: string;
+  private quoteUrl?: string;
   private fileName = 'board.kicad_pcb';
 
-  constructor(private readonly api: ExportApi) {}
+  /** `origin`: the PCBWay endpoint origin in the manifest (a mock's in test builds). */
+  constructor(private readonly api: ExportApi, private readonly origin = 'https://www.pcbway.com') {}
 
   async inspect(fileName: string): Promise<BoardSummary> {
     this.exports.clear();
     this.bundleId = undefined;
+    this.quoteUrl = undefined;
     this.fileName = fileName;
     const run = await this.api.run('fab-components');
     const json = run.files.find(file => file.name.endsWith('.json'));
@@ -96,5 +121,25 @@ export class PcbwaySession {
   async download() {
     if (!this.bundleId) throw new Error('Build the ZIP first.');
     return this.api.saveBundle({ bundleId: this.bundleId });
+  }
+
+  /** Upload the ZIP to PCBWay with the board size and layer count, as PCBWay's plugin does. */
+  async send() {
+    if (!this.bundleId || !this.fab) throw new Error('Build the ZIP first.');
+    const { board } = this.fab.doc;
+    const answer = await this.api.upload('pcbway', {
+      path: PCBWAY_UPLOAD_PATH,
+      bundleId: this.bundleId,
+      fields: { boardWidth: board.widthMm.toFixed(2), boardHeight: board.heightMm.toFixed(2), boardLayer: String(board.copperLayers) },
+    });
+    if (answer.status !== 200) throw new Error(`PCBWay did not accept the upload (HTTP ${answer.status}).`);
+    this.quoteUrl = quoteUrlFrom(answer.body, this.origin);
+    return { quoteUrl: this.quoteUrl };
+  }
+
+  /** PCBJam asks the user, then opens PCBWay's quote page in a new tab. */
+  async openQuote() {
+    if (!this.quoteUrl) throw new Error('Send the ZIP to PCBWay first.');
+    return this.api.openExternal(this.quoteUrl);
   }
 }

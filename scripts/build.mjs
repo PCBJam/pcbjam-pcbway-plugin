@@ -11,6 +11,14 @@ const require = createRequire(import.meta.url);
 /** Build on the author's machine. PCBJam never executes this script on upload. */
 export async function buildPlugin(outputRoot = path.join(root, 'dist')) {
   const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
+  // Test builds against a mock PCBWay (PCBWay has no sandbox): a separate plugin
+  // whose endpoint is the mock's https origin, e.g. a tunnel.
+  const mockOrigin = process.env.PCBWAY_ORIGIN;
+  if (mockOrigin) {
+    manifest.id += '-mock';
+    manifest.name += ' (mock)';
+    manifest.endpoints.pcbway.origin = mockOrigin;
+  }
   if (!/^[a-z][a-z0-9-]{2,63}$/.test(manifest.id) || !/^\d+\.\d+\.\d+$/.test(manifest.version)) {
     throw new Error('Use a valid plugin ID and major.minor.patch version in manifest.json.');
   }
@@ -32,7 +40,7 @@ export async function buildPlugin(outputRoot = path.join(root, 'dist')) {
     logLevel: 'warning',
   };
   const [logic, ui] = await Promise.all([
-    build({ ...common, entryPoints: ['src/main.ts'], outfile: 'main.js', minify: false }),
+    build({ ...common, entryPoints: ['src/main.ts'], outfile: 'main.js', minify: false, define: { ...common.define, PCBWAY_ORIGIN: JSON.stringify(manifest.endpoints.pcbway.origin) } }),
     build({ ...common, entryPoints: ['src/ui/main.tsx'], outfile: 'ui.js', jsx: 'automatic', minify: true }),
   ]);
   for (const result of [logic, ui]) {

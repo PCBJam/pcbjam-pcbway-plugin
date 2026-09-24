@@ -24,9 +24,13 @@ export function App() {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [board, setBoard] = useState<BoardSummary | null>(null);
   const [saved, setSaved] = useState('');
+  const [sending, setSending] = useState<'idle' | 'sending' | 'sent'>('idle');
+  const [sendError, setSendError] = useState('');
 
   async function generate() {
     setSaved('');
+    setSending('idle');
+    setSendError('');
     let step = 0;
     try {
       setPhase({ kind: 'running', step });
@@ -53,13 +57,34 @@ export function App() {
     }
   }
 
+  async function send() {
+    setSending('sending');
+    setSendError('');
+    try {
+      await callPlugin('send', {});
+      setSending('sent');
+    } catch (error) {
+      setSending('idle');
+      setSendError(message(error));
+    }
+  }
+
+  async function openQuote() {
+    try {
+      const result = await callPlugin('openQuote', {});
+      if (result.status === 'cancelled') setSendError('Opening PCBWay was cancelled. You can open the quote again.');
+    } catch (error) {
+      setSendError(message(error));
+    }
+  }
+
   const running = phase.kind === 'running';
   return (
     <main>
       <h1>PCBWay</h1>
       <p>
-        Build the files PCBWay needs to quote and make this board: Gerbers, drill files, an IPC-356 netlist, and
-        PCBWay's BOM and placement CSVs, in one ZIP. PCBJam generates them on its servers from the saved project.
+        Send this board to PCBWay for a quote. PCBJam builds the files PCBWay needs on its servers from the saved
+        project: Gerbers, drill files, an IPC-356 netlist, and PCBWay's BOM and placement CSVs, in one ZIP.
       </p>
       {phase.kind === 'idle' && <button onClick={generate}>Generate PCBWay ZIP</button>}
       {(phase.kind === 'running' || phase.kind === 'failed') && (
@@ -83,14 +108,24 @@ export function App() {
             Board {phase.board.widthMm.toFixed(1)} × {phase.board.heightMm.toFixed(1)} mm, {phase.board.copperLayers} copper layers,
             {' '}{phase.board.parts} parts ({phase.board.smd} SMD, {phase.board.tht} through-hole)
           </p>
-          <button onClick={download}>Download ZIP</button>
-          {saved && <p className="status" role="status">{saved}</p>}
+          {sending === 'sent' ? (
+            <>
+              <p className="status" role="status">Uploaded to PCBWay. Review the quote and order on PCBWay's site.</p>
+              <button onClick={openQuote}>Open PCBWay quote</button>
+            </>
+          ) : (
+            <button onClick={send} disabled={sending === 'sending'}>{sending === 'sending' ? 'Sending to PCBWay…' : 'Send to PCBWay'}</button>
+          )}
+          {sendError && <p role="alert" className="error">{sendError}</p>}
+          <button className="secondary" onClick={download}>Download ZIP</button>
+          {saved && <p className="status">{saved}</p>}
           <details>
             <summary>{phase.bundle.files.length} files</summary>
             <ul className="files">{phase.bundle.files.map(file => <li key={file.name}>{file.name} <span>{size(file.size)}</span></li>)}</ul>
           </details>
           <p className="note">
-            Next: upload this ZIP on PCBWay's online PCB quote page. Sending it to PCBWay directly from PCBJam is coming.
+            Send uploads the ZIP with the board size and layer count to PCBWay, the way PCBWay's KiCad plugin does, and
+            opens their quote page in a new tab. Or download the ZIP and upload it on PCBWay's site yourself.
           </p>
           <button className="secondary" onClick={generate}>Generate again</button>
         </section>

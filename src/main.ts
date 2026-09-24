@@ -1,13 +1,18 @@
 import type { ExportStep, PluginCommands } from './contracts';
 import { PcbwaySession } from './logic/workflow';
 
+// The PCBWay endpoint origin in manifest.json; build.mjs sets it (a mock's in test builds).
+declare const PCBWAY_ORIGIN: string;
+
 // These handlers run in QuickJS. React and browser APIs belong in src/ui/.
 const session = new PcbwaySession({
   run: kind => pcbjam.exports.run(kind),
   readJson: (exportId, name) => pcbjam.exports.readJson(exportId, name),
   bundle: proposal => pcbjam.exports.bundle(proposal),
   saveBundle: proposal => pcbjam.files.saveBundle(proposal),
-});
+  upload: (endpointId, request) => pcbjam.http.upload(endpointId, request),
+  openExternal: url => pcbjam.ui.openExternal(url),
+}, PCBWAY_ORIGIN);
 
 const STEPS: ExportStep[] = ['gerbers', 'drill', 'ipc356'];
 
@@ -27,3 +32,5 @@ pcbjam.handle('export', async (params: unknown): Promise<PluginCommands['export'
 
 pcbjam.handle('pack', (): Promise<PluginCommands['pack']['result']> => session.pack());
 pcbjam.handle('download', (): Promise<PluginCommands['download']['result']> => session.download());
+pcbjam.handle('send', (): Promise<PluginCommands['send']['result']> => session.send());
+pcbjam.handle('openQuote', (): Promise<PluginCommands['openQuote']['result']> => session.openQuote());

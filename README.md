@@ -9,11 +9,29 @@ A [PCBJam](https://pcbjam.com) plugin for the PCB editor that builds a
   using the column set and rules of
   [PCBWay's KiCad plugin](https://github.com/pcbway/PCBWay-Plug-in-for-Kicad)
 
-Download the ZIP and upload it on PCBWay's online quote page. Sending it to
-PCBWay directly from PCBJam is planned.
+**Send to PCBWay** uploads the ZIP with the board size and layer count to
+PCBWay's KiCad upload endpoint, the way PCBWay's own KiCad plugin does, and
+opens the quote page PCBWay returns in a new browser tab (after you confirm).
+Or download the ZIP and upload it on PCBWay's site yourself.
 
 It uses only PCBJam's public plugin API (`pcbjam.exports.*`,
-`pcbjam.files.saveBundle`); the file bytes never enter the plugin sandbox.
+`pcbjam.files.saveBundle`, `pcbjam.http.upload`, `pcbjam.ui.openExternal`);
+the file bytes never enter the plugin sandbox.
+
+## Testing without PCBWay
+
+PCBWay has no public sandbox. `mock/` is a stand-in for its upload endpoint
+that checks what the plugin sends and serves a quote page listing it:
+
+```sh
+npm run mock                                       # http://127.0.0.1:3058
+cloudflared tunnel --url http://127.0.0.1:3058     # an https name for it
+PUBLIC_ORIGIN=https://<name>.trycloudflare.com npm run mock
+PCBWAY_ORIGIN=https://<name>.trycloudflare.com npm run build   # dist/pcbway-mock.zip, "PCBWay (mock)"
+```
+
+Publish the mock build on a PCBJam test stack and approve its endpoint; the
+real build (`npm run build`) always targets `https://www.pcbway.com`.
 
 > **Availability:** PCBJam's plugin platform is currently on the staging editor
 > only. Install the plugin from the PCBJam marketplace (`/plugins`); questions

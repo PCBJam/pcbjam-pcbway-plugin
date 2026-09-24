@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PcbwaySession, parseFabDoc, zipNameFor, type ExportApi } from '../src/logic/workflow';
+import { PcbwaySession, parseFabDoc, quoteUrlFrom, zipNameFor, type ExportApi } from '../src/logic/workflow';
 
 const fabDoc = {
   board: { widthMm: 50, heightMm: 30, bboxOriginMm: { x: 0, y: 0 }, auxOriginMm: { x: 10, y: 10 }, copperLayers: 2, thicknessMm: 1.6 },
@@ -18,6 +18,8 @@ function fakeApi(overrides: Partial<ExportApi> = {}) {
     readJson: async (exportId, name) => { calls.push(['readJson', exportId, name]); return structuredClone(fabDoc); },
     bundle: async proposal => { calls.push(['bundle', proposal]); return { bundleId: 'b1', name: proposal.zipName, size: 1234, files: [] }; },
     saveBundle: async proposal => { calls.push(['saveBundle', proposal]); return { status: 'download-requested' }; },
+    upload: async (endpointId, request) => { calls.push(['upload', endpointId, request]); return { status: 200, body: { redirect: 'https://www.pcbway.com/project/quote/123' } }; },
+    openExternal: async url => { calls.push(['openExternal', url]); return { status: 'opened' }; },
     ...overrides,
   };
   return { api, calls };
@@ -67,5 +69,44 @@ describe('PCBWay workflow', () => {
     expect(zipNameFor('dir/Ünïcode board.kicad_pcb')).toBe('n_code board.kicad_pcb.zip');
     expect(zipNameFor('___')).toBe('board.zip');
     expect(zipNameFor('x'.repeat(200) + '.kicad_pcb')).toMatch(/^x{86}\.zip$/);
+  });
+});
+
+describe('Send to PCBWay', () => {
+  const built = async (overrides: Partial<ExportApi> = {}, origin?: string) => {
+    const fake = fakeApi(overrides);
+    const session = new PcbwaySession(fake.api, origin);
+    await session.inspect('main.kicad_pcb');
+    for (const kind of ['gerbers', 'drill', 'ipc356'] as const) await session.export(kind);
+    await session.pack();
+    return { session, calls: fake.calls };
+  };
+
+  it('uploads the bundle with board size and layers, then opens the quote PCBWay returned', async () => {
+    const { session, calls } = await built();
+    expect(await session.send()).toEqual({ quoteUrl: 'https://www.pcbway.com/project/quote/123' });
+    expect(calls.find(call => call[0] === 'upload')).toEqual(['upload', 'pcbway', { path: '/Common/KiCadUpFile/', bundleId: 'b1', fields: { boardWidth: '50.00', boardHeight: '30.00', boardLayer: '2' } }]);
+    expect(await session.openQuote()).toEqual({ status: 'opened' });
+    expect(calls.at(-1)).toEqual(['openExternal', 'https://www.pcbway.com/project/quote/123']);
+  });
+
+  it('never offers a link outside PCBWay or a failed upload', async () => {
+    for (const body of [{ redirect: 'https://evil.example/pcbway.com' }, { redirect: 'http://www.pcbway.com/q' }, { redirect: 'https://user:pw@www.pcbway.com/q' }, { redirect: 'javascript:alert(1)' }, {}, null]) {
+      const { session } = await built({ upload: async () => ({ status: 200, body }) });
+      await expect(session.send()).rejects.toThrow(/PCBWay answered/);
+      await expect(session.openQuote()).rejects.toThrow('Send the ZIP to PCBWay first');
+    }
+    const { session } = await built({ upload: async () => ({ status: 500, body: { error: 'x' } }) });
+    await expect(session.send()).rejects.toThrow('HTTP 500');
+    expect(quoteUrlFrom({ redirect: 'https://member.pcbway.com/cart' }, 'https://www.pcbway.com')).toBe('https://member.pcbway.com/cart');
+  });
+
+  it('a mock build checks links against the mock origin', async () => {
+    const { session } = await built({ upload: async () => ({ status: 200, body: { redirect: 'https://pcbway-mock.example/mock-quote/1' } }) }, 'https://pcbway-mock.example');
+    expect(await session.send()).toEqual({ quoteUrl: 'https://pcbway-mock.example/mock-quote/1' });
+  });
+
+  it('refuses to send before the ZIP is built', async () => {
+    await expect(new PcbwaySession(fakeApi().api).send()).rejects.toThrow('Build the ZIP first');
   });
 });

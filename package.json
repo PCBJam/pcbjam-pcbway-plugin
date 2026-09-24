@@ -1,6 +1,6 @@
 {
   "name": "pcbjam-pcbway-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.logic.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.test.json",
     "build": "npm run typecheck && node scripts/build.mjs",
     "test": "vitest run",
-    "dev": "node scripts/watch.mjs"
+    "dev": "node scripts/watch.mjs",
+    "mock": "node mock/serve.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
@@ -26,7 +27,7 @@
     "@types/node": "22.15.3"
   },
   "license": "MIT",
-  "description": "PCBWay fabrication ZIP for the PCBJam PCB editor",
+  "description": "PCBWay for the PCBJam PCB editor: send the board to PCBWay or download a PCBWay-ready ZIP",
   "repository": {
     "type": "git",
     "url": "https://github.com/PCBJam/pcbjam-pcbway-plugin.git"
