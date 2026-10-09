@@ -52,4 +52,11 @@ Gergő Törcsvári, ported from PCBWay's MIT-licensed KiCad plugin.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The CSV rules in `src/logic/fab.ts` are ported
+from PCBWay's MIT-licensed KiCad plugin (© PCBWay, Aisler and contributors);
+its notice, and those of the bundled React packages, are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and in the plugin package's
+`LICENSE.txt`.
+
+PCBWay is a trademark of its owner. This plugin is not made, affiliated with or
+endorsed by PCBWay.

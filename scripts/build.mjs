@@ -80,7 +80,8 @@ export async function buildPlugin(outputRoot = path.join(root, 'dist')) {
     'ui.html': html,
     'sdk.d.ts': await readFile(path.join(root, 'types/logic.d.ts'), 'utf8') + await readFile(path.join(root, 'types/ui.d.ts'), 'utf8'),
     // This plugin's own license first; bundled dependencies follow.
-    'LICENSE.txt': [`${manifest.name}\n${await readFile(path.join(root, 'LICENSE'), 'utf8')}`, ...licenses].join('\n\n'),
+    'LICENSE.txt': [`${manifest.name}\n${await readFile(path.join(root, 'LICENSE'), 'utf8')}`,
+      await readFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), 'utf8'), ...licenses].join('\n\n'),
     'README.md': readme,
   };
   const folder = path.join(outputRoot, 'plugin');
