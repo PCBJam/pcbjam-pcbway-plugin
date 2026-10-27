@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "pcbway",
   "name": "PCBWay Export",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Send the open board to PCBWay for a quote, or download a PCBWay-ready ZIP: Gerbers, drill files, IPC-356 netlist, and PCBWay's BOM and placement CSVs.",
   "main": "main.js",
   "ui": "ui.html",

@@ -11,11 +11,17 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: 'pack', label: 'Building BOM, placement and ZIP' },
 ];
 
+// Two exports at a time: most of an export is PCBJam staging the project, and the export
+// service runs only a few per instance, so pairs halve the wait without crowding it.
+const ROUND_1: ExportStep[] = ['gerbers'];
+const ROUND_2: ExportStep[] = ['drill', 'ipc356'];
+
+/** `active`: the steps of the round that is running, or that failed. */
 type Phase =
   | { kind: 'idle' }
-  | { kind: 'running'; step: number }
+  | { kind: 'running'; active: StepId[] }
   | { kind: 'done'; board: BoardSummary; bundle: BundleSummary }
-  | { kind: 'failed'; step: number; message: string };
+  | { kind: 'failed'; active: StepId[]; message: string };
 
 const size = (bytes: number) => bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(2)} MB`;
 const message = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong.';
@@ -31,20 +37,18 @@ export function App() {
     setSaved('');
     setSending('idle');
     setSendError('');
-    let step = 0;
+    let active: StepId[] = ['inspect', ...ROUND_1];
     try {
-      setPhase({ kind: 'running', step });
-      const summary = await callPlugin('inspect', {});
+      setPhase({ kind: 'running', active });
+      const summary = await callPlugin('inspect', { alongside: ROUND_1 });
       setBoard(summary);
-      for (const kind of ['gerbers', 'drill', 'ipc356'] as const) {
-        setPhase({ kind: 'running', step: ++step });
-        await callPlugin('export', { kind });
-      }
-      setPhase({ kind: 'running', step: ++step });
+      setPhase({ kind: 'running', active: active = ROUND_2 });
+      await callPlugin('export', { kinds: ROUND_2 });
+      setPhase({ kind: 'running', active: active = ['pack'] });
       const bundle = await callPlugin('pack', {});
       setPhase({ kind: 'done', board: summary, bundle });
     } catch (error) {
-      setPhase({ kind: 'failed', step, message: message(error) });
+      setPhase({ kind: 'failed', active, message: message(error) });
     }
   }
 
@@ -90,7 +94,8 @@ export function App() {
       {(phase.kind === 'running' || phase.kind === 'failed') && (
         <ol className="steps" aria-label="Progress">
           {STEPS.map((step, index) => {
-            const state = phase.kind === 'failed' && index === phase.step ? 'failed' : index < phase.step ? 'done' : index === phase.step && running ? 'active' : 'waiting';
+            const first = STEPS.findIndex(s => phase.active.includes(s.id));
+            const state = phase.active.includes(step.id) ? (running ? 'active' : 'failed') : index < first ? 'done' : 'waiting';
             return <li key={step.id} data-state={state}>{state === 'done' ? '✓ ' : state === 'failed' ? '✕ ' : state === 'active' ? '… ' : ''}{step.label}</li>;
           })}
         </ol>

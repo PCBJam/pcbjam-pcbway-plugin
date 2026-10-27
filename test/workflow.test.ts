@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PcbwaySession, parseFabDoc, quoteUrlFrom, zipNameFor, type ExportApi } from '../src/logic/workflow';
+import { BUSY_RETRY_MS, PcbwaySession, parseFabDoc, quoteUrlFrom, zipNameFor, type ExportApi } from '../src/logic/workflow';
 
 const fabDoc = {
   board: { widthMm: 50, heightMm: 30, bboxOriginMm: { x: 0, y: 0 }, auxOriginMm: { x: 10, y: 10 }, copperLayers: 2, thicknessMm: 1.6 },
@@ -29,8 +29,8 @@ describe('PCBWay workflow', () => {
   it('reads the component list, runs the three exports and bundles them with PCBWay file names', async () => {
     const { api, calls } = fakeApi();
     const session = new PcbwaySession(api);
-    expect(await session.inspect('boards/Main Board (v2).kicad_pcb')).toEqual({ fileName: 'boards/Main Board (v2).kicad_pcb', widthMm: 50, heightMm: 30, copperLayers: 2, parts: 2, smd: 1, tht: 1 });
-    for (const kind of ['gerbers', 'drill', 'ipc356'] as const) await session.export(kind);
+    expect(await session.inspect('boards/Main Board (v2).kicad_pcb', ['gerbers'])).toEqual({ fileName: 'boards/Main Board (v2).kicad_pcb', widthMm: 50, heightMm: 30, copperLayers: 2, parts: 2, smd: 1, tht: 1 });
+    expect(await session.export(['drill', 'ipc356'])).toEqual({ files: 2 });
     const bundle = await session.pack();
     expect(bundle.name).toBe('Main Board _v2_.kicad_pcb.zip');
     const [, proposal] = calls.find(call => call[0] === 'bundle') as [string, Parameters<ExportApi['bundle']>[0]];
@@ -48,10 +48,10 @@ describe('PCBWay workflow', () => {
 
   it('refuses steps out of order and a fresh inspect forgets the previous run', async () => {
     const session = new PcbwaySession(fakeApi().api);
-    await expect(session.export('gerbers')).rejects.toThrow('Read the board first');
+    await expect(session.export(['gerbers'])).rejects.toThrow('Read the board first');
     await expect(session.download()).rejects.toThrow('Build the ZIP first');
     await session.inspect('a.kicad_pcb');
-    await session.export('gerbers');
+    await session.export(['gerbers']);
     await expect(session.pack()).rejects.toThrow('Missing exports: drill, ipc356');
     await session.inspect('a.kicad_pcb');
     await expect(session.pack()).rejects.toThrow('Missing exports: gerbers, drill, ipc356');
@@ -62,6 +62,57 @@ describe('PCBWay workflow', () => {
     expect(() => parseFabDoc({ ...fabDoc, footprints: [{ ...fabDoc.footprints[0], posMm: { x: 'a' } }] })).toThrow('unexpected format');
     const session = new PcbwaySession(fakeApi({ run: async () => ({ exportId: 'x', files: [] }) }).api);
     await expect(session.inspect('a.kicad_pcb')).rejects.toThrow('produced no data');
+  });
+
+  it('starts the exports of a round together and settles all of them before failing', async () => {
+    const { api } = fakeApi();
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const together = new PcbwaySession({ ...api, run: async kind => { started.push(kind); await gate; return api.run(kind); } });
+    const inspecting = together.inspect('a.kicad_pcb', ['gerbers']);
+    expect(started).toEqual(['fab-components', 'gerbers']);
+    release();
+    await inspecting;
+
+    // A command that returns with host calls in flight stops the plugin: the failure waits for ipc356.
+    let finishIpc!: () => void, ipcDone = false;
+    const slowIpc = new Promise<void>(resolve => { finishIpc = resolve; });
+    const failing = new PcbwaySession({ ...api, run: async kind => {
+      if (kind === 'drill') throw new Error('drill broke');
+      if (kind === 'ipc356') { await slowIpc; ipcDone = true; }
+      return api.run(kind);
+    } });
+    await failing.inspect('a.kicad_pcb');
+    let failed = false;
+    const exporting = failing.export(['drill', 'ipc356']).catch(error => { failed = true; throw error; });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(failed).toBe(false);
+    finishIpc();
+    await expect(exporting).rejects.toThrow('drill broke');
+    expect(ipcDone).toBe(true);
+  });
+
+  it('asks a busy export service again, and only a busy one', async () => {
+    const { api } = fakeApi();
+    const busy = () => Object.assign(new Error('The export service is busy or unavailable. Try again shortly.'), { code: 'EXPORT_UNAVAILABLE' });
+    const waits: number[] = [];
+    const wait = async (ms: number) => { waits.push(ms); };
+    let busyTimes = 2;
+    const recovers = new PcbwaySession({ ...api, run: async kind => { if (kind === 'gerbers' && busyTimes-- > 0) throw busy(); return api.run(kind); } }, undefined, wait);
+    await recovers.inspect('a.kicad_pcb', ['gerbers']);
+    expect(waits).toEqual([1000, 2000]);
+
+    waits.length = 0;
+    const staysBusy = new PcbwaySession({ ...api, run: async kind => { if (kind === 'drill') throw busy(); return api.run(kind); } }, undefined, wait);
+    await staysBusy.inspect('a.kicad_pcb');
+    await expect(staysBusy.export(['drill'])).rejects.toThrow('busy');
+    expect(waits).toEqual(BUSY_RETRY_MS);
+
+    waits.length = 0;
+    const broken = new PcbwaySession({ ...api, run: async () => { throw Object.assign(new Error('Export failed: no outline'), { code: 'EXPORT_FAILED' }); } }, undefined, wait);
+    await expect(broken.inspect('a.kicad_pcb')).rejects.toThrow('no outline');
+    expect(waits).toEqual([]);
   });
 
   it('makes ZIP names PCBJam accepts', () => {
@@ -77,7 +128,7 @@ describe('Send to PCBWay', () => {
     const fake = fakeApi(overrides);
     const session = new PcbwaySession(fake.api, origin);
     await session.inspect('main.kicad_pcb');
-    for (const kind of ['gerbers', 'drill', 'ipc356'] as const) await session.export(kind);
+    await session.export(['gerbers', 'drill', 'ipc356']);
     await session.pack();
     return { session, calls: fake.calls };
   };

@@ -16,18 +16,25 @@ const session = new PcbwaySession({
 
 const STEPS: ExportStep[] = ['gerbers', 'drill', 'ipc356'];
 
-pcbjam.handle('inspect', async (): Promise<PluginCommands['inspect']['result']> => {
+// Runtime checks still protect against malformed UI messages: known exports, each at most once.
+function exportKinds(value: unknown): ExportStep[] {
+  if (!Array.isArray(value) || new Set(value).size !== value.length || !value.every(kind => STEPS.includes(kind)))
+    throw new Error('Unknown export.');
+  return value;
+}
+
+pcbjam.handle('inspect', async (params: unknown): Promise<PluginCommands['inspect']['result']> => {
+  const alongside = exportKinds((params as { alongside?: unknown } | null)?.alongside ?? []);
   const context = await pcbjam.context.get();
   if (context.tool !== 'pcbnew') throw new Error('Open a board in the PCB editor.');
   if (!context.methods.includes('exports.run')) throw new Error('This PCBJam does not offer exports here. Open a saved project.');
-  return session.inspect(context.fileName);
+  return session.inspect(context.fileName, alongside);
 });
 
 pcbjam.handle('export', async (params: unknown): Promise<PluginCommands['export']['result']> => {
-  // Runtime checks still protect against malformed UI messages.
-  const kind = (params as { kind?: unknown } | null)?.kind;
-  if (typeof kind !== 'string' || !STEPS.includes(kind as ExportStep)) throw new Error('Unknown export.');
-  return session.export(kind as ExportStep);
+  const kinds = exportKinds((params as { kinds?: unknown } | null)?.kinds);
+  if (!kinds.length) throw new Error('Unknown export.');
+  return session.export(kinds);
 });
 
 pcbjam.handle('pack', (): Promise<PluginCommands['pack']['result']> => session.pack());

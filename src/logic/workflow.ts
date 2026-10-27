@@ -57,7 +57,24 @@ export function zipNameFor(fileName: string) {
   return (base || 'board').slice(0, 86) + '.zip';
 }
 
-/** One run of the PCBWay workflow. Each step is a separate UI command so the panel can show progress. */
+/** Waits before asking a busy export service again (`EXPORT_UNAVAILABLE`: its pool is full). */
+export const BUSY_RETRY_MS = [1000, 2000, 4000];
+
+/**
+ * Like Promise.all, but fails only once every task has settled: a command that
+ * returns while host calls are still in flight stops the plugin.
+ */
+async function settleAll<T>(tasks: Promise<T>[]): Promise<T[]> {
+  const settled = await Promise.allSettled(tasks);
+  const failed = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) throw failed.reason;
+  return settled.map(result => (result as PromiseFulfilledResult<T>).value);
+}
+
+/**
+ * One run of the PCBWay workflow. Each round is a separate UI command so the panel can show progress;
+ * the exports of a round run at the same time.
+ */
 export class PcbwaySession {
   private fab?: { exportId: string; doc: FabComponentsDoc };
   private exports = new Map<ExportStep, string>();
@@ -65,19 +82,23 @@ export class PcbwaySession {
   private quoteUrl?: string;
   private fileName = 'board.kicad_pcb';
 
-  /** `origin`: the PCBWay endpoint origin in the manifest (a mock's in test builds). */
-  constructor(private readonly api: ExportApi, private readonly origin = 'https://www.pcbway.com') {}
+  /**
+   * `origin`: the PCBWay endpoint origin in the manifest (a mock's in test builds).
+   * `wait`: the pause between busy retries (logic timers in QuickJS; tests pass their own).
+   */
+  constructor(private readonly api: ExportApi, private readonly origin = 'https://www.pcbway.com',
+    private readonly wait = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms); })) {}
 
-  async inspect(fileName: string): Promise<BoardSummary> {
+  /** Reads the component list; the `alongside` exports run at the same time. */
+  async inspect(fileName: string, alongside: readonly ExportStep[] = []): Promise<BoardSummary> {
+    this.fab = undefined;
     this.exports.clear();
     this.bundleId = undefined;
     this.quoteUrl = undefined;
     this.fileName = fileName;
-    const run = await this.api.run('fab-components');
-    const json = run.files.find(file => file.name.endsWith('.json'));
-    if (!json) throw new Error('The component export produced no data.');
-    const doc = parseFabDoc(await this.api.readJson(run.exportId, json.name));
-    this.fab = { exportId: run.exportId, doc };
+    const components = this.readComponents();
+    await settleAll<unknown>([components, ...alongside.map(kind => this.runExport(kind))]);
+    const { doc } = this.fab = await components;
     const placed = doc.footprints.filter(fp => !fp.excludeFromPos);
     return {
       fileName,
@@ -90,12 +111,37 @@ export class PcbwaySession {
     };
   }
 
-  async export(kind: ExportStep) {
+  /** Runs the exports at the same time. */
+  async export(kinds: readonly ExportStep[]) {
     if (!this.fab) throw new Error('Read the board first.');
-    const run = await this.api.run(kind);
+    const files = await settleAll(kinds.map(kind => this.runExport(kind)));
+    return { files: files.reduce((total, count) => total + count, 0) };
+  }
+
+  private async readComponents() {
+    const run = await this.run('fab-components');
+    const json = run.files.find(file => file.name.endsWith('.json'));
+    if (!json) throw new Error('The component export produced no data.');
+    return { exportId: run.exportId, doc: parseFabDoc(await this.api.readJson(run.exportId, json.name)) };
+  }
+
+  private async runExport(kind: ExportStep) {
+    const run = await this.run(kind);
     if (!run.files.length) throw new Error(`The ${kind} export produced no files.`);
     this.exports.set(kind, run.exportId);
-    return { files: run.files.length };
+    return run.files.length;
+  }
+
+  /** One export; a busy export service is asked again a few times before giving up. */
+  private async run(kind: Parameters<ExportApi['run']>[0]) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.api.run(kind);
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code !== 'EXPORT_UNAVAILABLE' || attempt >= BUSY_RETRY_MS.length) throw error;
+        await this.wait(BUSY_RETRY_MS[attempt]!);
+      }
+    }
   }
 
   async pack(): Promise<BundleSummary> {

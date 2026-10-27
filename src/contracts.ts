@@ -18,8 +18,10 @@ export interface BundleSummary {
 }
 
 export interface PluginCommands {
-  inspect: { params: Record<string, never>; result: BoardSummary };
-  export: { params: { kind: ExportStep }; result: { files: number } };
+  /** `alongside`: exports that run while the component list is read. */
+  inspect: { params: { alongside?: ExportStep[] }; result: BoardSummary };
+  /** The exports run at the same time. */
+  export: { params: { kinds: ExportStep[] }; result: { files: number } };
   pack: { params: Record<string, never>; result: BundleSummary };
   download: { params: Record<string, never>; result: { status: 'download-requested' | 'cancelled' } };
   send: { params: Record<string, never>; result: { quoteUrl: string } };
