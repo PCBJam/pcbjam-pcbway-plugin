@@ -11,14 +11,71 @@ type PCBJamGeometryDrawing = {layer:string;text?:'reference'|'value'|'field'|'te
 /** `$` names the record: 'board' | 'footprint' | 'drawing' | 'tracks' | 'zone'. See the API guide for each shape. */
 type PCBJamGeometryRecord = {$:string;[key:string]:any};
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
+/** A placed symbol on the shown schematic sheet; `ref`, `value` and `footprint` as shown on this sheet;
+ *  `angle` 0/90/180/270 and `mirror` ''/'x'/'y' its orientation; `x`/`y` its anchor in schematic units (10 000 per mm). */
+type PCBJamSheetSymbol = {uuid:string;libId:string;ref:string;value:string;footprint:string;angle:0|90|180|270;mirror:''|'x'|'y';x:number;y:number};
+/** A net with a pin on the shown sheet. Power symbols name their net (`+5V`) but their own `#PWR` pins are
+ *  not listed; unconnected pins sit alone in `unconnected-(REF-PadN)`. `noConnect`: an X marks the pin. */
+type PCBJamSheetNet = {net:string;pins:{uuid:string;ref:string;libId:string;pin:string;name:string;noConnect:boolean}[]};
+/** Where a pointer or tour step points: `tool:<action>`, `menu:<Title>[/<Item>]`, `dialog:<CLASS>[/control:<type>[:<label>]]`,
+ *  `item:<uuid>`, `footprint:<REF>` (PCB editor), `symbol:<REF>` (schematic editor), `area:x,y,w,h` / `point:x,y` (world IU),
+ *  `tooltip:<text>`; in tours also `new:<libId>`. */
+type PCBJamTarget = string;
+type PCBJamPointer = {target:PCBJamTarget;title?:string;text:string;lostText?:string;placement?:'auto'|'top'|'bottom'|'left'|'right';spotlight?:boolean;pulse?:boolean};
+/** Selects pins: exactly one of libId/ref/power; `pin` for libId/ref; `all` = every placed matching symbol. */
+type PCBJamPinSel = {libId:string;pin:string;all?:boolean} | {ref:string;pin:string;all?:boolean} | {power:string};
+/** Tour conditions, evaluated by PCBJam. next/action/dialogOpened/dialogClosed/checkFinished/simFinished/simTraces are
+ *  events (a step using one stays done once met while it is on screen); the rest are re-checked live. `checkFinished`:
+ *  ERC or DRC ran in its dialog, optionally with at most `maxErrors` / `maxWarnings` (`{kind:'erc', maxErrors:0}` = a
+ *  clean ERC). `simFinished`: KiCad's simulator finished a run with data (`kind`: 'tran', 'ac', 'op'…); `simTraces`:
+ *  its plot shows all these traces ("I(D1)", "V(/OUT)"), after a run or a probe click. The simulator and the
+ *  footprint-assignment tool count as open dialogs: `dialogOpen:'SIMULATOR_FRAME'` / `'CVPCB_MAINFRAME'`. */
+type PCBJamTourCond =
+  | {next:true} | {action:string} | {dialogOpened:string} | {dialogClosed:string} | {dialogOpen:string}
+  | {checkFinished:{kind:'erc'|'drc';maxErrors?:number;maxWarnings?:number}}
+  | {symbols:{libId:string;min:number;new?:boolean}}
+  | {footprint:{libId:string;set:true|string} | {ref:string;set:true|string}}
+  | {value:{libId:string;is:string} | {ref:string;is:string}}
+  // Every placed matching symbol is turned to one of these angles and/or mirrored: 'y' is KiCad's Mirror
+  // Horizontally (X key), 'x' Mirror Vertically (Y key), 'none' unmirrored. At least one of angle / mirror.
+  | {orientation:({libId:string} | {ref:string}) & {angle?:(0|90|180|270)[];mirror?:'x'|'y'|'none'}}
+  | {net:PCBJamPinSel[]} | {noConnect:PCBJamPinSel}
+  // PCB editor: footprints on the board (by ref, fpid, or all; `inside` = every pad inside the closed outline),
+  // a closed Edge.Cuts outline, connections still unrouted, track count, the active layer ("Edge.Cuts").
+  // `angle`: every matching footprint is turned to one of these angles (degrees, ±0.5); `side` keeps only the
+  // footprints on that side of the board. `vias`: at least this many; `zones`: copper zones of a net, on a layer,
+  // filled or not (`{net:'GND', layer:'B.Cu', filled:true}` = a filled ground fill on the bottom).
+  | {boardFootprints:{ref?:string;fpid?:string;side?:'front'|'back';min?:number;inside?:true;angle?:number[]}}
+  | {boardOutline:{closed:true}} | {unrouted:{max:number}} | {tracks:{min:number}} | {activeLayer:string}
+  | {vias:{min:number}} | {zones:{net?:string;layer?:string;filled?:boolean;min?:number}}
+  | {simFinished:{kind?:string;minPoints?:number}} | {simTraces:{has:string[]}}
+  | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
+/** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.
+ *  The last step must finish on `{next:true}`. At most 60 steps, 64 KiB. Event steps stay done across a
+ *  reload, an editor switch and a closed tab (progress is kept per project, in this browser). Later steps get a Back button that also puts the document back the way it was when
+ *  the earlier step first showed (steps that only show inside a dialog are skipped). `celebrate` throws a
+ *  short host-drawn celebration when its step shows. `closable:false`: the cards have no × and Escape
+ *  leaves them alone; closing your panel then pauses the tour (`resume` continues it). */
+type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
+  steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
 declare function setTimeout(callback:(...args:any[])=>unknown,ms?:number,...args:any[]):number;
 declare function clearTimeout(id:number):void;
+/** A plugin edit's outcome (plugins 0023): the item ids it added, changed and removed, or the user said no. */
+type PCBJamEditResult={status:'applied';added:string[];changed:string[];removed:string[]}|{status:'cancelled'};
 declare const pcbjam: {
+  /** An HTTPS request straight from your plugin to a site its manifest declares in `network` (with its
+   *  `direct:<hostname>` permission, which the user accepts at install). The site must answer CORS for the
+   *  editor's origin. PCBJam fixes the rest: no cookies, no referrer, no cache, no redirects. GET or POST;
+   *  headers `accept`, `content-type`, `authorization`; a string body up to 128 KiB; at most 1 MiB back,
+   *  30 s, 4 at once and 30 a minute; only while a command runs, and awaited before it returns.
+   *  Errors carry `code`: ORIGIN_NOT_DECLARED, INVALID_REQUEST, NETWORK_ERROR, TIMEOUT,
+   *  RESPONSE_TOO_LARGE or RATE_LIMITED. */
+  net:{fetch(url:string,init?:{method?:'GET'|'POST';headers?:Record<string,string>;body?:string}):Promise<{status:number;ok:boolean;contentType:string|null;text:string}>};
   /** Approved HTTPS backend; no arbitrary URLs, headers or API keys. */
   http:{request(endpointId:string,request:{method:'GET';path:string}|{method:'POST';path:string;json:PCBJamJSON}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>;
     /** POST a bundle (`exports.bundle`) as multipart/form-data to an endpoint path that declares `upload` in the
@@ -26,7 +83,30 @@ declare const pcbjam: {
     upload(endpointId:string,request:{path:string;bundleId:string;fields?:Record<string,string>}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
   /** Open an https page of one of the plugin's approved endpoint sites in a new browser tab after the user confirms
    *  (needs `ui:open-external`). Never an iframe; the editor stays open. */
-  ui:{openExternal(url:string):Promise<{status:'opened'|'cancelled'}>};
+  ui:{openExternal(url:string):Promise<{status:'opened'|'cancelled'}>;
+    /** One pointer over the editor (needs `editor:overlay`), drawn by PCBJam with your plugin's name. It stays
+     *  until cleared or the plugin stops. `not-found`: the target is not on screen now (the card shows
+     *  `lostText`). Refused while your tour runs. */
+    overlay:{show(step:PCBJamPointer):Promise<{status:'shown'|'not-found'}>;clear():Promise<null>}};
+  /** A guided tour PCBJam runs for you (needs `editor:overlay`): it keeps going between commands, follows the
+   *  user's state, and stops when your plugin stops. `resume:true` continues a tour of that id still active in
+   *  this project in this browser (after a reload, the page switch between editors, or the next visit) and
+   *  answers `not-active` otherwise. `busy`: another tour is running. */
+  tour:{start(tour:PCBJamTour,options?:{resume?:boolean}):Promise<{status:'started'|'not-active'|'busy'}>;
+    stop():Promise<null>;
+    status():Promise<{id:string|null;step:number;of:number;state:'active'|'done'|'dismissed'|'none'}>};
+  /** Save a part you ship — KiCad symbol and/or footprint text — into your plugin's own team library
+   *  (`plugin_<id>`), after the user confirms (needs `library:write-parts`). The symbol's Footprint field is set to
+   *  the saved footprint. With `place: true` (schematic only) the symbol then follows the cursor; the call resolves
+   *  once the part is stored, not when it is placed. `cancelled`: the user declined. */
+  parts:{save(part:{displayName:string;symbol?:{name:string;text:string};footprint?:{name:string;text:string};place:boolean}):
+    Promise<{status:'saved';library:string;symbolLibId?:string;footprintLibId?:string}|{status:'cancelled'}>};
+  /** Schematic editor only (needs `documents:read`): the shown sheet as the engine sees it. */
+  schematic:{symbols():Promise<PCBJamSheetSymbol[]>;connectivity():Promise<PCBJamSheetNet[]>;
+    /** Schematic editor, shown sheet, needs `schematic:write`. Like `board.edit` for `(symbol …)`, `(wire …)`,
+     *  `(junction …)`, `(no_connect …)`, labels, `(text …)` and shapes; `libSymbols` carries `(symbol "Lib:Name" …)`
+     *  definitions for symbols the sheet doesn't have yet. */
+    edit(edit:{label:string;upsert?:{sexpr:string}[];remove?:string[];libSymbols?:string[]}):Promise<PCBJamEditResult>};
   handle(command:string,handler:(params:any)=>unknown|Promise<unknown>):void;
   context:{get():Promise<{
     tool:string;fileName:string;readOnly:boolean;canPlaceItems:boolean;
@@ -94,12 +174,25 @@ declare const pcbjam: {
    *  you get ids, file names and sizes, can read small JSON outputs, and can zip exports for download. */
   exports:{
     run(kind:'gerbers'|'drill'|'ipc356'|'fab-components'):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}>;
+    /** Several kinds of the open board in one KiCad run (the board loads once): faster than one `run` per kind.
+     *  All or nothing, results in the order asked. Check `context.methods` for it; older hosts only have `run`. */
+    runMany(kinds:('gerbers'|'drill'|'ipc356'|'fab-components')[]):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}[]>;
+    /** Several kinds of the open board in one KiCad run (the board loads once): faster than one `run` per kind.
+     *  All or nothing, results in the order asked. Check `context.methods` for it; older hosts only have `run`. */
+    runMany(kinds:('gerbers'|'drill'|'ipc356'|'fab-components')[]):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}[]>;
     /** A JSON output of an export, at most 1 MiB (e.g. `fab-components.json`). */
     readJson(exportId:string,name:string):Promise<PCBJamJSON>;
     /** Zip exports with text files you made (≤ 16 files, ≤ 2 MiB); `rename` maps an export's file names. */
     bundle(proposal:{parts:{exportId:string;rename?:Record<string,string>}[];extraFiles?:{name:string;text:string}[];zipName:string}):Promise<{bundleId:string;name:string;size:number;files:{name:string;size:number}[]}>;
   };
   board:{
+    /** PCB editor only, needs `board:write`. Create, change and delete board items as ONE native commit: one
+     *  undo step, sent to collaborators like any edit. `upsert` items are KiCad item text (`(segment …)`,
+     *  `(via …)`, `(zone …)`, `(footprint …)`, `(gr_line …)`, …): an existing uuid replaces that item, a new one
+     *  adds it; nets must already exist. `remove` takes top-level item ids. All or nothing: errors carry `code`
+     *  (HELD: a collaborator holds an item, MISSING, INVALID, UNKNOWN_NET, BUSY, READ_ONLY). More than 50
+     *  items ask the user first (`cancelled`). */
+    edit(edit:{label:string;upsert?:{sexpr:string}[];remove?:string[]}):Promise<PCBJamEditResult>;
     /** PCB editor only. The open board as shapes the editor computed, so you draw polygons instead of re-deriving
      *  pads, arcs and text: `board` (bbox, outline polygons, net names when tracks/zones are included), one record per
      *  footprint (ref, value, side, pos, angle, bbox, attrs, fields, pads with per-side polygons and hole polygons,

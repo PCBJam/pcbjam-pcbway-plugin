@@ -11,10 +11,10 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: 'pack', label: 'Building BOM, placement and ZIP' },
 ];
 
-// Two exports at a time: most of an export is PCBJam staging the project, and the export
-// service runs only a few per instance, so pairs halve the wait without crowding it.
-const ROUND_1: ExportStep[] = ['gerbers'];
-const ROUND_2: ExportStep[] = ['drill', 'ipc356'];
+// A host with exports.runMany does all of them with the component list, in one KiCad run.
+// Older hosts run two at a time: the component list with Gerbers, then the other two, so the
+// export service (a few runs per instance) is not crowded.
+const EXPORTS: ExportStep[] = ['gerbers', 'drill', 'ipc356'];
 
 /** `active`: the steps of the round that is running, or that failed. */
 type Phase =
@@ -37,13 +37,16 @@ export function App() {
     setSaved('');
     setSending('idle');
     setSendError('');
-    let active: StepId[] = ['inspect', ...ROUND_1];
+    let active: StepId[] = ['inspect', ...EXPORTS];
     try {
       setPhase({ kind: 'running', active });
-      const summary = await callPlugin('inspect', { alongside: ROUND_1 });
+      const { exported, ...summary } = await callPlugin('inspect', { alongside: EXPORTS });
       setBoard(summary);
-      setPhase({ kind: 'running', active: active = ROUND_2 });
-      await callPlugin('export', { kinds: ROUND_2 });
+      const rest = EXPORTS.filter(kind => !exported.includes(kind));
+      if (rest.length) {
+        setPhase({ kind: 'running', active: active = rest });
+        await callPlugin('export', { kinds: rest });
+      }
       setPhase({ kind: 'running', active: active = ['pack'] });
       const bundle = await callPlugin('pack', {});
       setPhase({ kind: 'done', board: summary, bundle });

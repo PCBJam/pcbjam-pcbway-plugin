@@ -2,8 +2,13 @@ import type { BoardSummary, BundleSummary, ExportStep } from '../contracts';
 import { buildBomCsv, buildPositionsCsv, type FabComponentsDoc } from './fab';
 
 /** The slice of the PCBJam host API this plugin uses; tests pass a fake. */
+type ExportKind = 'gerbers' | 'drill' | 'ipc356' | 'fab-components';
+type ExportRun = { exportId: string; files: { name: string; size: number }[] };
+
 export interface ExportApi {
-  run(kind: 'gerbers' | 'drill' | 'ipc356' | 'fab-components'): Promise<{ exportId: string; files: { name: string; size: number }[] }>;
+  run(kind: ExportKind): Promise<ExportRun>;
+  /** Several exports in one KiCad run, in the order asked (hosts with `exports.runMany`). */
+  runMany(kinds: ExportKind[]): Promise<ExportRun[]>;
   readJson(exportId: string, name: string): Promise<unknown>;
   bundle(proposal: { parts: { exportId: string; rename?: Record<string, string> }[]; extraFiles?: { name: string; text: string }[]; zipName: string }): Promise<{ bundleId: string } & BundleSummary>;
   saveBundle(proposal: { bundleId: string }): Promise<{ status: 'download-requested' | 'cancelled' }>;
@@ -89,18 +94,31 @@ export class PcbwaySession {
   constructor(private readonly api: ExportApi, private readonly origin = 'https://www.pcbway.com',
     private readonly wait = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms); })) {}
 
-  /** Reads the component list; the `alongside` exports run at the same time. */
-  async inspect(fileName: string, alongside: readonly ExportStep[] = []): Promise<BoardSummary> {
+  /**
+   * Reads the component list with the `alongside` exports. With `batch` (the host has
+   * exports.runMany) they are all one KiCad run, which loads the board once; without it only the
+   * first runs next to the component list, and `export` does the rest. `exported`: the ones done.
+   */
+  async inspect(fileName: string, alongside: readonly ExportStep[] = [], batch = false): Promise<BoardSummary & { exported: ExportStep[] }> {
     this.fab = undefined;
     this.exports.clear();
     this.bundleId = undefined;
     this.quoteUrl = undefined;
     this.fileName = fileName;
-    const components = this.readComponents();
-    await settleAll<unknown>([components, ...alongside.map(kind => this.runExport(kind))]);
-    const { doc } = this.fab = await components;
+    const exported = batch ? [...alongside] : alongside.slice(0, 1);
+    let doc: FabComponentsDoc;
+    if (batch) {
+      const [fab, ...runs] = await this.busy(() => this.api.runMany(['fab-components', ...exported]));
+      runs.forEach((run, i) => this.keep(exported[i]!, run!));
+      ({ doc } = this.fab = await this.readComponents(fab!));
+    } else {
+      const components = this.busy(() => this.api.run('fab-components')).then(run => this.readComponents(run));
+      await settleAll<unknown>([components, ...exported.map(kind => this.runExport(kind))]);
+      ({ doc } = this.fab = await components);
+    }
     const placed = doc.footprints.filter(fp => !fp.excludeFromPos);
     return {
+      exported,
       fileName,
       widthMm: doc.board.widthMm,
       heightMm: doc.board.heightMm,
@@ -118,25 +136,27 @@ export class PcbwaySession {
     return { files: files.reduce((total, count) => total + count, 0) };
   }
 
-  private async readComponents() {
-    const run = await this.run('fab-components');
+  private async readComponents(run: ExportRun) {
     const json = run.files.find(file => file.name.endsWith('.json'));
     if (!json) throw new Error('The component export produced no data.');
     return { exportId: run.exportId, doc: parseFabDoc(await this.api.readJson(run.exportId, json.name)) };
   }
 
   private async runExport(kind: ExportStep) {
-    const run = await this.run(kind);
+    return this.keep(kind, await this.busy(() => this.api.run(kind)));
+  }
+
+  private keep(kind: ExportStep, run: ExportRun) {
     if (!run.files.length) throw new Error(`The ${kind} export produced no files.`);
     this.exports.set(kind, run.exportId);
     return run.files.length;
   }
 
-  /** One export; a busy export service is asked again a few times before giving up. */
-  private async run(kind: Parameters<ExportApi['run']>[0]) {
+  /** A busy export service is asked again a few times before giving up. */
+  private async busy<T>(call: () => Promise<T>) {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.api.run(kind);
+        return await call();
       } catch (error) {
         if ((error as { code?: unknown } | null)?.code !== 'EXPORT_UNAVAILABLE' || attempt >= BUSY_RETRY_MS.length) throw error;
         await this.wait(BUSY_RETRY_MS[attempt]!);

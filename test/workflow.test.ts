@@ -13,8 +13,10 @@ const fabDoc = {
 function fakeApi(overrides: Partial<ExportApi> = {}) {
   const calls: unknown[][] = [];
   let n = 0;
+  const answer = (kind: Parameters<ExportApi['run']>[0]) => ({ exportId: `e${++n}-${kind}`, files: kind === 'fab-components' ? [{ name: 'fab-components.json', size: 10 }] : kind === 'ipc356' ? [{ name: 'netlist.ipc', size: 5 }] : [{ name: `${kind}.out`, size: 5 }] });
   const api: ExportApi = {
-    run: async kind => { calls.push(['run', kind]); return { exportId: `e${++n}-${kind}`, files: kind === 'fab-components' ? [{ name: 'fab-components.json', size: 10 }] : kind === 'ipc356' ? [{ name: 'netlist.ipc', size: 5 }] : [{ name: `${kind}.out`, size: 5 }] }; },
+    run: async kind => { calls.push(['run', kind]); return answer(kind); },
+    runMany: async kinds => { calls.push(['runMany', kinds]); return kinds.map(answer); },
     readJson: async (exportId, name) => { calls.push(['readJson', exportId, name]); return structuredClone(fabDoc); },
     bundle: async proposal => { calls.push(['bundle', proposal]); return { bundleId: 'b1', name: proposal.zipName, size: 1234, files: [] }; },
     saveBundle: async proposal => { calls.push(['saveBundle', proposal]); return { status: 'download-requested' }; },
@@ -29,7 +31,8 @@ describe('PCBWay workflow', () => {
   it('reads the component list, runs the three exports and bundles them with PCBWay file names', async () => {
     const { api, calls } = fakeApi();
     const session = new PcbwaySession(api);
-    expect(await session.inspect('boards/Main Board (v2).kicad_pcb', ['gerbers'])).toEqual({ fileName: 'boards/Main Board (v2).kicad_pcb', widthMm: 50, heightMm: 30, copperLayers: 2, parts: 2, smd: 1, tht: 1 });
+    // An older host: Gerbers with the component list, the rest in the next round.
+    expect(await session.inspect('boards/Main Board (v2).kicad_pcb', ['gerbers', 'drill', 'ipc356'])).toEqual({ exported: ['gerbers'], fileName: 'boards/Main Board (v2).kicad_pcb', widthMm: 50, heightMm: 30, copperLayers: 2, parts: 2, smd: 1, tht: 1 });
     expect(await session.export(['drill', 'ipc356'])).toEqual({ files: 2 });
     const bundle = await session.pack();
     expect(bundle.name).toBe('Main Board _v2_.kicad_pcb.zip');
@@ -44,6 +47,31 @@ describe('PCBWay workflow', () => {
     expect(proposal.extraFiles![1]!.text).toContain('R1');
     expect(await session.download()).toEqual({ status: 'download-requested' });
     expect(calls.at(-1)).toEqual(['saveBundle', { bundleId: 'b1' }]);
+  });
+
+  it('runs everything in one batch when the host has exports.runMany', async () => {
+    const { api, calls } = fakeApi();
+    const session = new PcbwaySession(api);
+    expect(await session.inspect('a.kicad_pcb', ['gerbers', 'drill', 'ipc356'], true)).toMatchObject({ exported: ['gerbers', 'drill', 'ipc356'], parts: 2 });
+    expect(calls.map(call => call[0])).toEqual(['runMany', 'readJson']);
+    expect(calls[0]).toEqual(['runMany', ['fab-components', 'gerbers', 'drill', 'ipc356']]);
+    expect(calls[1]).toEqual(['readJson', 'e1-fab-components', 'fab-components.json']);
+    await session.pack();
+    const [, proposal] = calls.find(call => call[0] === 'bundle') as [string, Parameters<ExportApi['bundle']>[0]];
+    expect(proposal.parts.map(part => part.exportId)).toEqual(['e2-gerbers', 'e3-drill', 'e4-ipc356']);
+  });
+
+  it('asks a busy export service again for a batch too', async () => {
+    const { api } = fakeApi();
+    const waits: number[] = [];
+    let busyTimes = 1;
+    const session = new PcbwaySession({ ...api, runMany: async kinds => {
+      if (busyTimes-- > 0) throw Object.assign(new Error('busy'), { code: 'EXPORT_UNAVAILABLE' });
+      return api.runMany(kinds);
+    } }, undefined, async ms => { waits.push(ms); });
+    await session.inspect('a.kicad_pcb', ['gerbers', 'drill', 'ipc356'], true);
+    expect(waits).toEqual([BUSY_RETRY_MS[0]]);
+    expect((await session.pack()).name).toBe('a.kicad_pcb.zip');
   });
 
   it('refuses steps out of order and a fresh inspect forgets the previous run', async () => {

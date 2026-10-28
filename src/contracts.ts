@@ -18,8 +18,11 @@ export interface BundleSummary {
 }
 
 export interface PluginCommands {
-  /** `alongside`: exports that run while the component list is read. */
-  inspect: { params: { alongside?: ExportStep[] }; result: BoardSummary };
+  /**
+   * `alongside`: exports that run with the component list: all in one KiCad run when the host
+   * has exports.runMany, else only the first. `exported`: the ones done; `export` runs the rest.
+   */
+  inspect: { params: { alongside?: ExportStep[] }; result: BoardSummary & { exported: ExportStep[] } };
   /** The exports run at the same time. */
   export: { params: { kinds: ExportStep[] }; result: { files: number } };
   pack: { params: Record<string, never>; result: BundleSummary };
